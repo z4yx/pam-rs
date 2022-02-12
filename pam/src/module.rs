@@ -77,15 +77,23 @@ pub trait PamItem {
 
 
 impl PamHandle {
+    /// Create a CString object from &str. Return PAM_SYSTEM_ERR if it fails.
+    fn alloc_cstring(input: &str) -> PamResult<CString> {
+        match CString::new(input) {
+            Ok(i) => Ok(i),
+            Err(_) => Err(PamResultCode::PAM_SYSTEM_ERR)
+        }
+    }
+
     /// Gets some value, identified by `key`, that has been set by the module
     /// previously.
     ///
     /// See `pam_get_data` in
     /// http://www.linux-pam.org/Linux-PAM-html/mwg-expected-by-module-item.html
     pub unsafe fn get_data<'a, T>(&'a self, key: &str) -> PamResult<&'a T> {
-        let c_key = CString::new(key).unwrap().as_ptr();
+        let c_key = Self::alloc_cstring(key)?;
         let mut ptr: *const PamDataT = ptr::null();
-        let res = pam_get_data(self, c_key, &mut ptr);
+        let res = pam_get_data(self, c_key.as_ptr(), &mut ptr);
         if PamResultCode::PAM_SUCCESS == res && !ptr.is_null() {
             let typed_ptr: *const T = mem::transmute(ptr);
             let data: &T = &*typed_ptr;
@@ -101,10 +109,10 @@ impl PamHandle {
     /// See `pam_set_data` in
     /// http://www.linux-pam.org/Linux-PAM-html/mwg-expected-by-module-item.html
     pub fn set_data<T>(&self, key: &str, data: Box<T>) -> PamResult<()> {
-        let c_key = CString::new(key).unwrap().as_ptr();
+        let c_key = Self::alloc_cstring(key)?;
         let res = unsafe {
             let c_data: Box<PamDataT> = mem::transmute(data);
-            pam_set_data(self, c_key, c_data, cleanup::<T>)
+            pam_set_data(self, c_key.as_ptr(), c_data, cleanup::<T>)
         };
         if PamResultCode::PAM_SUCCESS == res {
             Ok(())
@@ -143,7 +151,7 @@ impl PamHandle {
     /// See `pam_set_item` in
     /// http://www.linux-pam.org/Linux-PAM-html/mwg-expected-by-module-item.html
     pub fn set_item_str<T: PamItem>(&mut self, item: &str) -> PamResult<()> {
-        let c_item = CString::new(item).unwrap().as_ptr();
+        let c_item = Self::alloc_cstring(item)?;
 
         let res = unsafe {
             pam_set_item(self,
@@ -151,7 +159,7 @@ impl PamHandle {
 
                         // unwrapping is okay here, as c_item will not be a NULL
                         // pointer
-                        (c_item as *const PamItemT).as_ref().unwrap())
+                        (c_item.as_ptr() as *const PamItemT).as_ref().unwrap())
         };
         if PamResultCode::PAM_SUCCESS == res {
             Ok(())
@@ -169,10 +177,10 @@ impl PamHandle {
     pub fn get_user(&self, prompt: Option<&str>) -> PamResult<String> {
         let ptr: *mut c_char = ptr::null_mut();
         let c_prompt = match prompt {
-            Some(p) => CString::new(p).unwrap().as_ptr(),
-            None => ptr::null(),
+            Some(p) => Some(Self::alloc_cstring(p)?),
+            None => None,
         };
-        let res = unsafe { pam_get_user(self, &ptr, c_prompt) };
+        let res = unsafe { pam_get_user(self, &ptr, c_prompt.map_or(ptr::null(), |s| s.as_ptr())) };
         if PamResultCode::PAM_SUCCESS == res && !ptr.is_null() {
             let const_ptr = ptr as *const c_char;
             let bytes = unsafe { CStr::from_ptr(const_ptr).to_bytes() };
